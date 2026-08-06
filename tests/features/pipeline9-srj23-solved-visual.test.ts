@@ -3,7 +3,7 @@ import { AutoroutingPipelineSolver9_PreloadedTraceGraph } from "lib/autorouter-p
 import { loadScenarioBySampleNumber } from "../../scripts/benchmark/scenarios"
 import { getLastStepSvg } from "../fixtures/getLastStepSvg"
 
-const SAMPLE_NUMBERS = [1, 10, 23]
+const SAMPLE_NUMBERS = [1, 3, 10]
 
 test("Pipeline9 visually solves representative SRJ23 samples", async () => {
   for (const sampleNumber of SAMPLE_NUMBERS) {
@@ -26,8 +26,12 @@ test("Pipeline9 visually solves representative SRJ23 samples", async () => {
     expect(solver.solved).toBe(true)
     expect(solver.failed).toBe(false)
 
+    const snapshotPath =
+      process.platform === "linux" && sampleNumber === 10
+        ? import.meta.path.replace(/\.test\.ts$/, "-linux.test.ts")
+        : import.meta.path
     await expect(getLastStepSvg(solver.visualize())).toMatchSvgSnapshot(
-      import.meta.path,
+      snapshotPath,
       {
         svgName: scenarioName,
       },
