@@ -48,7 +48,11 @@ export const createPipeline7AutoroutingDrcEvaluator = (
       ...conversionOptions,
       hdRoutes: evaluatedRoutes,
     })
+    const preloadedTraces = conversionOptions.originalSrj.traces ?? []
 
-    return engine.evaluate(traces as unknown as RepairSimplifiedPcbTraces)
+    return engine.evaluate([
+      ...preloadedTraces,
+      ...traces,
+    ] as unknown as RepairSimplifiedPcbTraces)
   }
 }
