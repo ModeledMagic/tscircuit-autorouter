@@ -2,7 +2,6 @@ import { RectDiffPipeline } from "@tscircuit/rectdiff"
 import { PostProcessingSolver } from "@tscircuit/length-matching-solver"
 import { ConnectivityMap } from "circuit-json-to-connectivity-map"
 import type { GraphicsObject, Line } from "graphics-debug"
-import { HighDensityForceImproveSolver } from "high-density-repair01/lib/HighDensityForceImproveSolver"
 import {
   GlobalDrcBranchPortfolioSolver,
   GlobalDrcForceImproveSolver,
@@ -56,8 +55,6 @@ import { CapacityMeshEdgeSolver2_NodeTreeOptimization } from "../../solvers/Capa
 import { CapacityNodeTargetMerger } from "../../solvers/CapacityNodeTargetMerger/CapacityNodeTargetMerger"
 import { DeadEndSolver } from "../../solvers/DeadEndSolver/DeadEndSolver"
 import { EscapeViaLocationSolver } from "../../solvers/EscapeViaLocationSolver/EscapeViaLocationSolver"
-import { Pipeline4HighDensityRepairSolver } from "../../solvers/HighDensityRepairSolver/Pipeline4HighDensityRepairSolver"
-import { HighDensitySolver } from "../../solvers/HighDensitySolver/HighDensitySolver"
 import { MultiSectionPortPointOptimizer } from "../../solvers/MultiSectionPortPointOptimizer"
 import { NetToPointPairsSolver } from "../../solvers/NetToPointPairsSolver/NetToPointPairsSolver"
 import { NetToPointPairsSolver2_OffBoardConnection } from "../../solvers/NetToPointPairsSolver2_OffBoardConnection/NetToPointPairsSolver2_OffBoardConnection"
@@ -67,6 +64,7 @@ import { StrawSolver } from "../../solvers/StrawSolver/StrawSolver"
 import { TraceSimplificationSolver } from "../../solvers/TraceSimplificationSolver/TraceSimplificationSolver"
 import { TraceWidthSolver } from "../../solvers/TraceWidthSolver/TraceWidthSolver"
 import { convertPreloadedTraceToHdRoutes } from "./convert-preloaded-traces-to-hd-routes"
+import { Pipeline9HighDensitySolver } from "./pipeline9-high-density-solver"
 import { PreloadedTraceGraphSolver } from "./preloaded-trace-graph-solver"
 import { PreprocessSimpleRouteJsonWithoutTraceObstaclesSolver } from "./preprocess-simple-route-json-without-trace-obstacles-solver"
 import { MergedComponentTopologyView } from "../AutoroutingPipeline7_MultiGraph/MergedComponentTopologyView"
@@ -223,9 +221,7 @@ export class AutoroutingPipelineSolver9_PreloadedTraceGraph extends BaseSolver {
   nodeTargetMerger?: CapacityNodeTargetMerger
   edgeSolver?: CapacityMeshEdgeSolver
   colorMap!: Record<string, string>
-  highDensityRouteSolver?: HighDensitySolver
-  highDensityForceImproveSolver?: HighDensityForceImproveSolver
-  highDensityRepairSolver?: Pipeline4HighDensityRepairSolver
+  highDensityRouteSolver?: Pipeline9HighDensitySolver
   highDensityStitchSolver?: MultipleHighDensityRouteStitchSolver3
   globalDrcForceImproveSolver?: GlobalDrcForceImproveSolver
   exactGeometryDrcForceImproveSolver?: GlobalDrcBranchPortfolioSolver
@@ -540,68 +536,44 @@ export class AutoroutingPipelineSolver9_PreloadedTraceGraph extends BaseSolver {
         },
       ],
     ),
-    definePipelineStep("highDensityRouteSolver", HighDensitySolver, (cms) => {
-      const uniformNodes = cms.uniformPortDistributionSolver?.getOutput() ?? []
-      const fallbackNodes =
-        cms.portPointPathingSolver?.getOutput().nodesWithPortPoints ?? []
-      const nodePortPointsSource =
-        uniformNodes.length > 0 ? uniformNodes : fallbackNodes
-
-      cms.highDensityNodePortPoints = structuredClone(nodePortPointsSource)
-
-      return [
-        {
-          nodePortPoints: nodePortPointsSource,
-          nodePfById: new Map(
-            (
-              cms.portPointPathingSolver?.getOutput().inputNodeWithPortPoints ??
-              []
-            ).map((node) => [
-              node.capacityMeshNodeId,
-              cms.portPointPathingSolver?.computeNodePf(node) ?? null,
-            ]),
-          ),
-          colorMap: cms.colorMap,
-          connMap: cms.connMap,
-          viaDiameter: cms.viaDiameter,
-          traceWidth: cms.minTraceWidth,
-          obstacleMargin: cms.srj.defaultObstacleMargin ?? 0.15,
-          obstacles: cms.srj.obstacles,
-          layerCount: cms.srj.layerCount,
-          useGrowShrinkHighDensityIntraNodeSolver: true,
-          preserveTerminalPcbPortIds: true,
-          growShrinkFallbackToInvalidGeometryOnFailure: true,
-        },
-      ]
-    }),
     definePipelineStep(
-      "highDensityForceImproveSolver",
-      HighDensityForceImproveSolver,
-      (cms) => [
-        {
-          nodeWithPortPoints: cms.highDensityNodePortPoints ?? [],
-          hdRoutes: cms.highDensityRouteSolver!.routes,
-          colorMap: cms.colorMap,
-          totalStepsPerNode: Math.max(12, Math.round(20 * cms.effort)),
-          nodeAssignmentMargin: cms.srj.defaultObstacleMargin ?? 0.2,
-        },
-      ],
-    ),
-    definePipelineStep(
-      "highDensityRepairSolver",
-      Pipeline4HighDensityRepairSolver,
-      (cms) => [
-        {
-          nodeWithPortPoints: cms.highDensityNodePortPoints ?? [],
-          hdRoutes:
-            cms.highDensityForceImproveSolver?.getOutput() ??
-            cms.highDensityRouteSolver!.routes,
-          obstacles: cms.srj.obstacles,
-          colorMap: cms.colorMap,
-          repairMargin: cms.srj.defaultObstacleMargin ?? 0.2,
-          maxSampleEntries: 80,
-        },
-      ],
+      "highDensityRouteSolver",
+      Pipeline9HighDensitySolver,
+      (cms) => {
+        const uniformNodes =
+          cms.uniformPortDistributionSolver?.getOutput() ?? []
+        const fallbackNodes =
+          cms.portPointPathingSolver?.getOutput().nodesWithPortPoints ?? []
+        const nodePortPointsSource =
+          uniformNodes.length > 0 ? uniformNodes : fallbackNodes
+
+        cms.highDensityNodePortPoints = structuredClone(nodePortPointsSource)
+        const fixedHdRoutes = (cms.originalSrj.traces ?? []).flatMap(
+          (trace, traceIndex) =>
+            convertPreloadedTraceToHdRoutes(
+              trace,
+              traceIndex,
+              cms.originalSrj.layerCount,
+              cms.viaDiameter,
+              cms.connMap,
+            ),
+        )
+
+        return [
+          {
+            nodePortPoints: nodePortPointsSource,
+            fixedHdRoutes,
+            connMap: cms.connMap,
+            obstacles: cms.srj.obstacles,
+            layerCount: cms.srj.layerCount,
+            viaDiameter: cms.viaDiameter,
+            traceWidth: cms.minTraceWidth,
+            obstacleMargin: cms.srj.defaultObstacleMargin ?? 0.15,
+            effort: cms.effort,
+            preserveTerminalPcbPortIds: true,
+          },
+        ]
+      },
     ),
     definePipelineStep(
       "highDensityStitchSolver",
@@ -609,10 +581,7 @@ export class AutoroutingPipelineSolver9_PreloadedTraceGraph extends BaseSolver {
       (cms) => [
         {
           connections: cms.srjWithPointPairs!.connections,
-          hdRoutes:
-            cms.highDensityRepairSolver?.getOutput() ??
-            cms.highDensityForceImproveSolver?.getOutput() ??
-            cms.highDensityRouteSolver!.routes,
+          hdRoutes: cms.highDensityRouteSolver!.routes,
           colorMap: cms.colorMap,
           layerCount: cms.srj.layerCount,
           defaultViaDiameter: cms.viaDiameter,
@@ -915,9 +884,6 @@ export class AutoroutingPipelineSolver9_PreloadedTraceGraph extends BaseSolver {
     const uniformPortDistributionViz =
       this.uniformPortDistributionSolver?.visualize()
     const highDensityViz = this.highDensityRouteSolver?.visualize()
-    const highDensityForceImproveViz =
-      this.highDensityForceImproveSolver?.visualize()
-    const highDensityRepairViz = this.highDensityRepairSolver?.visualize()
     const highDensityStitchViz = this.highDensityStitchSolver?.visualize()
     const traceSimplificationViz = this.traceSimplificationSolver?.visualize()
     const lengthMatchingPostProcessingViz =
@@ -1040,8 +1006,6 @@ export class AutoroutingPipelineSolver9_PreloadedTraceGraph extends BaseSolver {
       highDensityViz
         ? combineVisualizations(problemBaseViz, highDensityViz)
         : null,
-      highDensityForceImproveViz,
-      highDensityRepairViz,
       highDensityStitchViz,
       traceSimplificationViz,
       traceWidthViz,
