@@ -70,11 +70,11 @@ import {
   type PreloadedHighDensityRoute,
 } from "./convert-preloaded-traces-to-hd-routes"
 import { Pipeline9HighDensitySolver } from "./pipeline9-high-density-solver"
+import { createPipeline9RelaxedDrcEvaluator } from "./create-pipeline9-relaxed-drc-evaluator"
 import { PreloadedTraceGraphSolver } from "./preloaded-trace-graph-solver"
 import { PreprocessSimpleRouteJsonWithoutTraceObstaclesSolver } from "./preprocess-simple-route-json-without-trace-obstacles-solver"
 import { MergedComponentTopologyView } from "../AutoroutingPipeline7_MultiGraph/MergedComponentTopologyView"
 import { convertPipeline7HdRoutesToSimplifiedPcbTraces } from "../AutoroutingPipeline7_MultiGraph/convertPipeline7HdRoutesToSimplifiedPcbTraces"
-import { createPipeline7RelaxedDrcEvaluator } from "../AutoroutingPipeline7_MultiGraph/create-pipeline7-relaxed-drc-evaluator"
 import { lockHdRouteTerminals } from "../AutoroutingPipeline7_MultiGraph/lock-hd-route-terminals"
 
 interface CapacityMeshSolverOptions {
@@ -666,7 +666,7 @@ export class AutoroutingPipelineSolver9_PreloadedTraceGraph extends BaseSolver {
       "exactGeometryDrcForceImproveSolver",
       GlobalDrcBranchPortfolioSolver,
       (cms) => {
-        const relaxedDrcEvaluator = createPipeline7RelaxedDrcEvaluator({
+        const relaxedDrcEvaluator = createPipeline9RelaxedDrcEvaluator({
           connections: cms.netToPointPairsSolver?.newConnections ?? [],
           originalConnections: cms.originalSrj.connections,
           layerCount: cms.srj.layerCount,
@@ -675,6 +675,7 @@ export class AutoroutingPipelineSolver9_PreloadedTraceGraph extends BaseSolver {
           connMap: cms.connMap,
           srjWithPointPairs: cms.srjWithPointPairs!,
           originalSrj: cms.originalSrj,
+          mutatedPreloadedTraces: cms.getMutatedPreloadedTraces(),
         })
 
         return [
@@ -690,6 +691,7 @@ export class AutoroutingPipelineSolver9_PreloadedTraceGraph extends BaseSolver {
             enableLargeBoardBroadFallback: false,
             enableTargetedErrorSweep: true,
             enablePostSolveClearanceRelaxation: false,
+            enableSafeTraceLayerMoves: true,
             enableViaInPadLayerMoves: true,
             viaInPadMaxIterations: 32,
             broadMaxIterations: 8,
