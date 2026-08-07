@@ -197,3 +197,8 @@ result-*
 tmp
 
 *.received.svg
+
+# Workspace task and Bun caches
+.turbo/
+.bun/
+bun-debug.log*
