@@ -28,6 +28,7 @@ import { convertHdRouteToSimplifiedRoute } from "lib/utils/convertHdRouteToSimpl
 import { convertSrjToGraphicsObject } from "lib/utils/convertSrjToGraphicsObject"
 import { createObstacleLabelFormatter } from "lib/utils/formatObstacleLabel"
 import { getConnectivityMapFromSimpleRouteJson } from "lib/utils/getConnectivityMapFromSimpleRouteJson"
+import { getInitiallyConnectedMapFromSimpleRouteJson } from "lib/utils/get-initially-connected-map-from-simple-route-json"
 import {
   getGraphicsLayerForConnectionPoint,
   getGraphicsLayerForObstacle,
@@ -44,6 +45,7 @@ import { DeadEndSolver } from "../../solvers/DeadEndSolver/DeadEndSolver"
 import { EscapeViaLocationSolver } from "../../solvers/EscapeViaLocationSolver/EscapeViaLocationSolver"
 import { Pipeline4HighDensityRepairSolver } from "../../solvers/HighDensityRepairSolver/Pipeline4HighDensityRepairSolver"
 import { HighDensitySolver } from "../../solvers/HighDensitySolver/HighDensitySolver"
+import { hasImpossibleSameLayerCrossingGeometry } from "../../solvers/HyperHighDensitySolver/GrowShrinkHighDensityIntraNodeSolver/invalidSameLayerCrossingGeometry"
 import { MultiSectionPortPointOptimizer } from "../../solvers/MultiSectionPortPointOptimizer"
 import { NetToPointPairsSolver } from "../../solvers/NetToPointPairsSolver/NetToPointPairsSolver"
 import { NetToPointPairsSolver2_OffBoardConnection } from "../../solvers/NetToPointPairsSolver2_OffBoardConnection/NetToPointPairsSolver2_OffBoardConnection"
@@ -177,7 +179,14 @@ export class AutoroutingPipelineSolver4_TinyHypergraph extends BaseSolver {
     definePipelineStep(
       "netToPointPairsSolver",
       NetToPointPairsSolver2_OffBoardConnection,
-      (cms) => [cms.srjWithEscapeViaLocations ?? cms.srj, cms.colorMap],
+      (cms) => {
+        const inputSrj = cms.srjWithEscapeViaLocations ?? cms.srj
+        return [
+          inputSrj,
+          cms.colorMap,
+          getInitiallyConnectedMapFromSimpleRouteJson(inputSrj),
+        ]
+      },
       {
         onSolved: (cms) => {
           cms.srjWithPointPairs =
@@ -248,7 +257,6 @@ export class AutoroutingPipelineSolver4_TinyHypergraph extends BaseSolver {
           capacityMeshNodes: cms.capacityNodes!,
           sharedEdgeSegments: cms.availableSegmentPointSolver!.getOutput(),
           simpleRouteJson: cms.srjWithPointPairs!,
-          numberOfCrampedPortPointsToKeep: 5,
         },
       ],
     ),
@@ -326,12 +334,23 @@ export class AutoroutingPipelineSolver4_TinyHypergraph extends BaseSolver {
         cms.portPointPathingSolver?.getOutput().nodesWithPortPoints ?? []
       const nodePortPointsSource =
         uniformNodes.length > 0 ? uniformNodes : fallbackNodes
+      const routableNodePortPoints = nodePortPointsSource.map((node) =>
+        hasImpossibleSameLayerCrossingGeometry(node)
+          ? {
+              ...node,
+              availableZ: Array.from(
+                { length: cms.srj.layerCount },
+                (_, z) => z,
+              ),
+            }
+          : node,
+      )
 
-      cms.highDensityNodePortPoints = structuredClone(nodePortPointsSource)
+      cms.highDensityNodePortPoints = structuredClone(routableNodePortPoints)
 
       return [
         {
-          nodePortPoints: nodePortPointsSource,
+          nodePortPoints: routableNodePortPoints,
           nodePfById: new Map(
             (
               cms.portPointPathingSolver?.getOutput().inputNodeWithPortPoints ??

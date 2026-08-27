@@ -5,6 +5,14 @@ export type PointId = string
 export type OffBoardConnectionId = string
 export type ObstacleId = string
 export type RootConnectionName = string
+export type CircuitJsonMetadata = {
+  pcb_smtpad_id?: string
+  pcb_plated_hole_id?: string
+  pcb_port_id?: string
+  pcb_via_id?: string
+  source_component_name?: string
+  source_port_name?: string
+}
 export type TerminalViaHint = {
   toLayer: string
   viaDiameter?: number
@@ -55,6 +63,7 @@ export interface SimpleRouteJson {
   min_via_pad_diameter?: number
   defaultObstacleMargin?: number
   minTraceToPadEdgeClearance?: number
+  minBoardEdgeClearance?: number
   minViaEdgeToPadEdgeClearance?: number
   obstacles: Obstacle[]
   connections: Array<SimpleRouteConnection>
@@ -100,6 +109,11 @@ export interface Obstacle {
   obstacleId?: string
   /** Optional source component identifier associated with this obstacle. */
   componentId?: string
+  /**
+   * Optional Circuit JSON provenance carried through SRJ.
+   * Routing algorithms must not use this field.
+   */
+  circuitJsonMetadata?: CircuitJsonMetadata
   type: "rect"
   layers: string[]
   /** Public z-layer indexes supplied by SimpleRouteJson producers. */
@@ -135,6 +149,8 @@ export interface SimpleRouteConnection {
 export interface SimplifiedPcbTrace {
   type: "pcb_trace"
   pcb_trace_id: TraceId
+  /** Preloaded trace intentionally replaced by this routed output. */
+  __replaces_pcb_trace_id?: TraceId
   connection_name: string
   connectsTo?: Array<TraceId | NetId | PointId>
   route: Array<
@@ -173,6 +189,7 @@ export interface SimplifiedPcbTrace {
         from_layer: string
         to_layer: string
         width: number
+        circuitJsonMetadata?: CircuitJsonMetadata
       }
   >
 }

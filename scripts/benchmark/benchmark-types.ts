@@ -30,6 +30,16 @@ export type WorkerTaskMessage = {
   task: BenchmarkTask
 }
 
+export type BenchmarkStageTiming = {
+  stageName: string
+  elapsedTimeMs: number
+}
+
+export type BenchmarkStageTimingBreakdown = {
+  status: "complete" | "partial"
+  stages: BenchmarkStageTiming[]
+}
+
 export type WorkerProgress = {
   solverName: string
   scenarioName: string
@@ -41,6 +51,49 @@ export type WorkerProgress = {
   solverIterations?: number
   activeSubSolverProgress?: number
   activeSubSolverIterations?: number
+  stageTiming?: BenchmarkStageTimingBreakdown
+}
+
+export type TinyHypergraphBenchmarkMetrics = {
+  routeCount: number
+  traceDensityCandidateEvaluated?: boolean
+  traceDensityCandidateSelected?: boolean
+  downstreamNodePfSum?: number
+  downstreamNodePfSquaredSum?: number
+  downstreamNodePfMax?: number
+  downstreamSquaredNodePortPointCount?: number
+  iterations: number
+  timeMs?: number
+  ripCount?: number
+  partialRipCount?: number
+  partiallyRippedRouteCount?: number
+  partiallyRippedSegmentCount?: number
+  retainedPartialRipSegmentCount?: number
+  firstMaxRegionCost?: number
+  bestMaxRegionCost?: number
+  firstTotalRegionCost?: number
+  bestTotalRegionCost?: number
+  firstSegmentCount?: number
+  bestSolvedSegmentCount?: number
+  bestSolvedMaxRegionSegmentCount?: number
+  bestSolvedSquaredRegionSegmentCount?: number
+  finalMaxRegionSegmentCount: number
+  finalSquaredRegionSegmentCount: number
+  finalSegmentCount?: number
+  finalLayerChangeCount?: number
+  warmupFullRipAttempts?: number
+  complexityAwareSelection?: boolean
+  targetReached?: boolean
+  outsideInCompletedRouteCount?: number
+  outsideInFallbackRouteCount?: number
+  outsideInForwardExpansionCount?: number
+  outsideInReverseExpansionCount?: number
+}
+
+export type RoutingBenchmarkMetrics = {
+  tinyHypergraph?: TinyHypergraphBenchmarkMetrics
+  highDensityIterations?: number
+  phaseTimeMs?: Record<string, number>
 }
 
 export type WorkerResult<
@@ -63,6 +116,8 @@ export type WorkerResult<
   errorPhaseName?: string
   errorSolverName?: string
   error?: string
+  stageTiming?: BenchmarkStageTimingBreakdown
+  routingMetrics?: RoutingBenchmarkMetrics
   benchmarkSnapshot?: TBenchmarkSnapshot
 }
 
@@ -94,6 +149,11 @@ export type SolverRunSummary = {
   relaxedDrcRateLabel: string
   timedOutLabel: string
   p50TimeMs: number | null
+  // Optional so previously published version 1 artifacts remain readable.
+  p60TimeMs?: number | null
+  p70TimeMs?: number | null
+  p80TimeMs?: number | null
+  p90TimeMs?: number | null
   p95TimeMs: number | null
   avgVia: number | null
 }

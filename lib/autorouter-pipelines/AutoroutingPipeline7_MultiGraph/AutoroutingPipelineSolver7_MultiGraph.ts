@@ -1,3 +1,4 @@
+import { PostProcessingSolver as DifferentialPairPostProcessingSolver } from "@tscircuit/length-matching-solver"
 import type { PowerTraceExpanderOptions } from "@tscircuit/power-trace-expander"
 import { RectDiffPipeline } from "@tscircuit/rectdiff"
 import { ConnectivityMap } from "circuit-json-to-connectivity-map"
@@ -37,6 +38,7 @@ import {
 } from "lib/utils/convertSrjToGraphicsObject"
 import { createSrjWithBoardValidObstacleLayers } from "lib/utils/create-srj-with-board-valid-obstacle-layers"
 import { createObstacleLabelFormatter } from "lib/utils/formatObstacleLabel"
+import { getInitiallyConnectedMapFromSimpleRouteJson } from "lib/utils/get-initially-connected-map-from-simple-route-json"
 import { getConnectivityMapFromSimpleRouteJson } from "lib/utils/getConnectivityMapFromSimpleRouteJson"
 import {
   getGraphicsLayerForConnectionPoint,
@@ -70,9 +72,9 @@ import { MergedComponentTopologyView } from "./MergedComponentTopologyView"
 import { PowerTraceExpansionSolver } from "./PowerTraceExpansionSolver"
 import { convertPipeline7HdRoutesToSimplifiedPcbTraces } from "./convertPipeline7HdRoutesToSimplifiedPcbTraces"
 import { createPipeline7AutoroutingDrcEvaluator } from "./create-pipeline7-autorouting-drc-evaluator"
-import { DifferentialPairPostProcessingSolver } from "./differential-pair-post-processing-solver"
 import { getPowerTraceExpansionConnectionNames } from "./getPowerTraceExpansionConnectionNames"
 import { lockHdRouteTerminals } from "./lock-hd-route-terminals"
+import { preparePipeline7PowerTraceExpansionInput } from "./prepare-pipeline7-power-trace-expansion-input"
 
 interface CapacityMeshSolverOptions {
   capacityDepth?: number
@@ -306,7 +308,14 @@ export class AutoroutingPipelineSolver7_MultiGraph extends BaseSolver {
     definePipelineStep(
       "netToPointPairsSolver",
       NetToPointPairsSolver2_OffBoardConnection,
-      (cms) => [cms.srjWithEscapeViaLocations ?? cms.srj, cms.colorMap],
+      (cms) => {
+        const inputSrj = cms.srjWithEscapeViaLocations ?? cms.srj
+        return [
+          inputSrj,
+          cms.colorMap,
+          getInitiallyConnectedMapFromSimpleRouteJson(inputSrj),
+        ]
+      },
       {
         onSolved: (cms) => {
           cms.srjWithPointPairs =
@@ -430,7 +439,6 @@ export class AutoroutingPipelineSolver7_MultiGraph extends BaseSolver {
               componentCapacityMeshNodeIds,
             }),
             simpleRouteJson: cms.srjWithPointPairs!,
-            numberOfCrampedPortPointsToKeep: 5,
           },
         ]
       },
@@ -553,6 +561,7 @@ export class AutoroutingPipelineSolver7_MultiGraph extends BaseSolver {
           useGrowShrinkHighDensityIntraNodeSolver: true,
           preserveTerminalPcbPortIds: true,
           growShrinkFallbackToInvalidGeometryOnFailure: true,
+          captureSearchDebug: false,
         },
       ]
     }),
@@ -615,6 +624,8 @@ export class AutoroutingPipelineSolver7_MultiGraph extends BaseSolver {
           defaultViaDiameter: cms.viaDiameter,
           layerCount: cms.srj.layerCount,
           minTraceToPadEdgeClearance: cms.srj.minTraceToPadEdgeClearance,
+          minBoardEdgeClearance: cms.srj.minBoardEdgeClearance,
+          enableCrossingViaReduction: true,
           iterations: 2,
         },
       ],
@@ -658,6 +669,7 @@ export class AutoroutingPipelineSolver7_MultiGraph extends BaseSolver {
       "exactGeometryDrcForceImproveSolver",
       GlobalDrcBranchPortfolioSolver,
       (cms) => {
+        const hdRoutes = cms.globalDrcForceImproveSolver!.getOutput()
         const autoroutingDrcEvaluator = createPipeline7AutoroutingDrcEvaluator({
           connections: cms.netToPointPairsSolver?.newConnections ?? [],
           originalConnections: cms.originalSrj.connections,
@@ -672,7 +684,7 @@ export class AutoroutingPipelineSolver7_MultiGraph extends BaseSolver {
         return [
           {
             srj: cms.srjWithPointPairs! as any,
-            hdRoutes: cms.globalDrcForceImproveSolver!.getOutput(),
+            hdRoutes,
             connMap: cms.connMap,
             effort: cms.effort,
             viaHoleDiameter: cms.viaHoleDiameter,
@@ -680,6 +692,7 @@ export class AutoroutingPipelineSolver7_MultiGraph extends BaseSolver {
             viaInPadDrcEvaluator: autoroutingDrcEvaluator,
             maxIterations: 32,
             enableLargeBoardBroadFallback: false,
+            enableBroadFallback: false,
             enableTargetedErrorSweep: true,
             enablePostSolveClearanceRelaxation: false,
             enableSafeTraceLayerMoves: true,
@@ -739,7 +752,11 @@ export class AutoroutingPipelineSolver7_MultiGraph extends BaseSolver {
                 `Pipeline7: differential pair ${pair.connectionNames.join("/")} resolves both members to "${connectionNames[0]}"`,
               )
             if (pair.traceGap === undefined)
-              return { connectionNames, lengthTolerance: pair.lengthTolerance }
+              return {
+                connectionNames,
+                lengthTolerance: pair.lengthTolerance,
+                maxUncoupledLength: pair.maxUncoupledLength,
+              }
             const pairRoutes = connectionNames.map((connectionName) => {
               const matchingRoutes = hdRoutes.filter(
                 (route) => route.connectionName === connectionName,
@@ -760,6 +777,7 @@ export class AutoroutingPipelineSolver7_MultiGraph extends BaseSolver {
             return {
               connectionNames,
               lengthTolerance: pair.lengthTolerance,
+              maxUncoupledLength: pair.maxUncoupledLength,
               minimumCenterlineDistance: centerlineDistance,
               maximumCenterlineDistance: centerlineDistance,
             }
@@ -772,8 +790,6 @@ export class AutoroutingPipelineSolver7_MultiGraph extends BaseSolver {
             obstacles: cms.srj.obstacles,
             bounds: cms.srj.bounds,
             layerCount: cms.srj.layerCount,
-            obstacleMargin: cms.srj.minTraceToPadEdgeClearance ?? 0.15,
-            allowViaInPad: cms.originalSrj.allowViaInPad ?? false,
           },
         ]
       },
@@ -787,11 +803,11 @@ export class AutoroutingPipelineSolver7_MultiGraph extends BaseSolver {
           configuredOptions.onlyConnectionNames ??
           getPowerTraceExpansionConnectionNames(cms.originalSrj)
         return [
-          {
-            ...cms.originalSrj,
-            traces: cms.getPrePowerTraceOutputSimplifiedPcbTraces(),
-            fixedTraces: cms.originalSrj.traces ?? [],
-          },
+          preparePipeline7PowerTraceExpansionInput({
+            originalSrj: cms.originalSrj,
+            newlyRoutedTraces: cms.getPrePowerTraceOutputSimplifiedPcbTraces(),
+            expandedConnectionNames: onlyConnectionNames,
+          }),
           {
             allowNewVias: false,
             ...configuredOptions,
@@ -1144,8 +1160,11 @@ export class AutoroutingPipelineSolver7_MultiGraph extends BaseSolver {
   }
 
   _getOutputHdRoutes(): HighDensityRoute[] {
+    if (this.lengthMatchingPostProcessingSolver) {
+      const { hdRoutes } = this.lengthMatchingPostProcessingSolver.getOutput()
+      return hdRoutes
+    }
     return (
-      this.lengthMatchingPostProcessingSolver?.getOutput().hdRoutes ??
       this.exactGeometryDrcForceImproveSolver?.getOutput() ??
       this.globalDrcForceImproveSolver?.getOutput() ??
       this.traceWidthSolver?.getHdRoutesWithWidths() ??

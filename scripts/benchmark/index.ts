@@ -19,6 +19,7 @@ import type {
   WorkerResultWithImage,
   WorkerTaskMessage,
 } from "./benchmark-types"
+import { extendPartialBenchmarkStageTiming } from "./benchmark-stage-timing"
 import {
   DATASET_OPTIONS_LABEL,
   type DatasetName,
@@ -836,6 +837,10 @@ const formatTable = (rows: SolverRunSummary[]) => {
     "Relaxed DRC Pass %",
     "Timed Out",
     "P50 Time",
+    "P60 Time",
+    "P70 Time",
+    "P80 Time",
+    "P90 Time",
     "P95 Time",
     "Avg Via",
   ]
@@ -846,6 +851,10 @@ const formatTable = (rows: SolverRunSummary[]) => {
     row.relaxedDrcRateLabel,
     row.timedOutLabel,
     formatTime(row.p50TimeMs),
+    formatTime(row.p60TimeMs ?? null),
+    formatTime(row.p70TimeMs ?? null),
+    formatTime(row.p80TimeMs ?? null),
+    formatTime(row.p90TimeMs ?? null),
     formatTime(row.p95TimeMs),
     formatAverage(row.avgVia),
   ])
@@ -1075,7 +1084,7 @@ const replaceWorker = async (slot: WorkerSlot) => {
   await terminateWorker(previousWorker, `replacing worker ${slot.id}`)
 }
 
-const createFailedResult = (
+export const createFailedResult = (
   task: BenchmarkTask,
   elapsedTimeMs: number,
   error: string,
@@ -1092,6 +1101,12 @@ const createFailedResult = (
   errorPhaseName: latestProgress?.phaseName,
   errorSolverName: latestProgress?.phaseSolverName,
   error,
+  stageTiming: extendPartialBenchmarkStageTiming({
+    stageTiming: latestProgress?.stageTiming,
+    activeStageName: latestProgress?.phaseName,
+    progressElapsedTimeMs: latestProgress?.elapsedTimeMs,
+    finalElapsedTimeMs: elapsedTimeMs,
+  }),
 })
 
 const getTaskEffort = (task: BenchmarkTask) => {
@@ -1433,13 +1448,15 @@ const runBenchmarkTasks = async (
   return results
 }
 
-const summarizeSolverResults = (
+export const summarizeSolverResults = (
   solverName: string,
   results: WorkerResult[],
 ): SolverRunSummary => {
   const timedOut = results.filter((result) => result.didTimeout)
   const succeeded = results.filter((result) => result.didSolve)
-  const elapsedForSucceeded = succeeded.map((result) => result.elapsedTimeMs)
+  const elapsedForSolvedAndTimedOut = results
+    .filter((result) => result.didSolve || result.didTimeout)
+    .map((result) => result.elapsedTimeMs)
   const viaCounts = succeeded
     .map((result) => result.viaCount)
     .filter((viaCount): viaCount is number => typeof viaCount === "number")
@@ -1465,8 +1482,12 @@ const summarizeSolverResults = (
       timedOut.length,
     ),
     timedOutLabel: `${timedOut.length}/${results.length}`,
-    p50TimeMs: getPercentileMs(elapsedForSucceeded, 0.5),
-    p95TimeMs: getPercentileMs(elapsedForSucceeded, 0.95),
+    p50TimeMs: getPercentileMs(elapsedForSolvedAndTimedOut, 0.5),
+    p60TimeMs: getPercentileMs(elapsedForSolvedAndTimedOut, 0.6),
+    p70TimeMs: getPercentileMs(elapsedForSolvedAndTimedOut, 0.7),
+    p80TimeMs: getPercentileMs(elapsedForSolvedAndTimedOut, 0.8),
+    p90TimeMs: getPercentileMs(elapsedForSolvedAndTimedOut, 0.9),
+    p95TimeMs: getPercentileMs(elapsedForSolvedAndTimedOut, 0.95),
     avgVia,
   } satisfies SolverRunSummary
 }
