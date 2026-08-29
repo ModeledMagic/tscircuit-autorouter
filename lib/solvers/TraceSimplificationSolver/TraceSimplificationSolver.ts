@@ -8,8 +8,13 @@ import { SameNetViaMergerSolver } from "lib/solvers/SameNetViaMergerSolver/SameN
 import { GraphicsObject } from "graphics-debug"
 import { getJumpersGraphics } from "lib/utils/getJumperGraphics"
 import { createObjectsWithZLayers } from "lib/utils/createObjectsWithZLayers"
+import { CrossingViaReductionSolver } from "lib/solvers/CrossingViaReductionSolver/crossing-via-reduction-solver"
 
-type Phase = "via_removal" | "via_merging" | "path_simplification"
+type Phase =
+  | "via_removal"
+  | "crossing_via_reduction"
+  | "via_merging"
+  | "path_simplification"
 
 const VIA_INSIDE_OBSTACLE_TOLERANCE = 1e-6
 
@@ -27,13 +32,15 @@ const isMultilayerObstacle = (obstacle: Obstacle) =>
 
 /**
  * TraceSimplificationSolver consolidates trace optimization by iteratively applying
- * via removal, via merging, and path simplification phases. It reduces redundant vias
- * and simplifies routing paths through configurable iterations.
+ * via removal, crossing via reduction, via merging, and path simplification
+ * phases. The second via-removal pass can route short local detours around
+ * blocking pads while removing a via pair.
  *
- * The solver operates in three alternating phases per iteration:
+ * The solver operates in four alternating phases per iteration:
  * 1. "via_removal" - Removes unnecessary vias from routes using UselessViaRemovalSolver
- * 2. "via_merging" - Merges redundant vias on the same net using SameNetViaMergerSolver
- * 3. "path_simplification" - Simplifies routing paths using MultiSimplifiedPathSolver
+ * 2. "crossing_via_reduction" - Swaps layer ownership at crossings to remove via pairs
+ * 3. "via_merging" - Merges redundant vias on the same net using SameNetViaMergerSolver
+ * 4. "path_simplification" - Simplifies routing paths using MultiSimplifiedPathSolver
  *
  * Each iteration consists of all phases executed sequentially.
  */
@@ -44,11 +51,24 @@ export class TraceSimplificationSolver extends BaseSolver {
 
   hdRoutes: HighDensityRoute[] = []
 
+  private readonly preservedRouteEndpoints?: ReadonlyMap<
+    string,
+    {
+      start: HighDensityRoute["route"][number]
+      end: HighDensityRoute["route"][number]
+    }
+  >
+
   simplificationPipelineLoops = 0
 
   MAX_SIMPLIFICATION_PIPELINE_LOOPS: number = 2
 
-  PHASE_ORDER: Phase[] = ["via_removal", "via_merging", "path_simplification"]
+  PHASE_ORDER: Phase[] = [
+    "via_removal",
+    "crossing_via_reduction",
+    "via_merging",
+    "path_simplification",
+  ]
 
   currentPhase: Phase = "via_removal"
 
@@ -71,7 +91,12 @@ export class TraceSimplificationSolver extends BaseSolver {
    *   - defaultViaDiameter: Default diameter for vias
    *   - layerCount: Number of routing layers
    *   - minTraceToPadEdgeClearance: Minimum trace-edge clearance to pads/vias
+   *   - minBoardEdgeClearance: Minimum trace-edge clearance to the board outline
    *   - otherHdRoutes: Immutable routed traces to avoid while simplifying
+   *   - netByConnectionName: Explicit net metadata for synthetic route names
+   *   - enableCrossingViaReduction: Enables coordinated crossing layer swaps
+   *   - preserveRouteEndpoints: Prevents simplification from moving endpoint
+   *     coordinates or layers when routes represent spliceable local sections
    *   - iterations: Number of complete simplification iterations (default: 2)
    */
   constructor(
@@ -84,7 +109,11 @@ export class TraceSimplificationSolver extends BaseSolver {
       readonly defaultViaDiameter: number
       readonly layerCount: number
       readonly minTraceToPadEdgeClearance?: number
+      readonly minBoardEdgeClearance?: number
       readonly otherHdRoutes?: ReadonlyArray<HighDensityRoute>
+      readonly netByConnectionName?: ReadonlyMap<string, string>
+      readonly enableCrossingViaReduction?: boolean
+      readonly preserveRouteEndpoints?: boolean
     },
   ) {
     super()
@@ -98,7 +127,76 @@ export class TraceSimplificationSolver extends BaseSolver {
     this.hdRoutes = this.markThroughObstacleSegments(
       simplificationConfig.hdRoutes,
     )
+    if (simplificationConfig.preserveRouteEndpoints) {
+      const endpointByConnectionName = new Map<
+        string,
+        {
+          start: HighDensityRoute["route"][number]
+          end: HighDensityRoute["route"][number]
+        }
+      >()
+      for (const route of simplificationConfig.hdRoutes) {
+        const start = route.route[0]
+        const end = route.route.at(-1)
+        if (!start || !end) {
+          throw new Error(
+            `TraceSimplificationSolver cannot preserve endpoints for empty route "${route.connectionName}"`,
+          )
+        }
+        if (endpointByConnectionName.has(route.connectionName)) {
+          throw new Error(
+            `TraceSimplificationSolver cannot preserve endpoints for duplicate route "${route.connectionName}"`,
+          )
+        }
+        endpointByConnectionName.set(route.connectionName, {
+          start: { ...start },
+          end: { ...end },
+        })
+      }
+      this.preservedRouteEndpoints = endpointByConnectionName
+    }
     this.MAX_ITERATIONS = 100e6
+  }
+
+  private validatePreservedRouteEndpoints(routes: HighDensityRoute[]): void {
+    if (!this.preservedRouteEndpoints) return
+    if (routes.length !== this.preservedRouteEndpoints.size) {
+      throw new Error(
+        `TraceSimplificationSolver changed the preserved route set (expected ${this.preservedRouteEndpoints.size}, got ${routes.length})`,
+      )
+    }
+
+    const outputConnectionNames = new Set<string>()
+    const pointsMatch = (
+      left: HighDensityRoute["route"][number],
+      right: HighDensityRoute["route"][number],
+    ) =>
+      Math.abs(left.x - right.x) <= VIA_INSIDE_OBSTACLE_TOLERANCE &&
+      Math.abs(left.y - right.y) <= VIA_INSIDE_OBSTACLE_TOLERANCE &&
+      left.z === right.z
+
+    for (const route of routes) {
+      if (outputConnectionNames.has(route.connectionName)) {
+        throw new Error(
+          `TraceSimplificationSolver produced duplicate preserved route "${route.connectionName}"`,
+        )
+      }
+      outputConnectionNames.add(route.connectionName)
+      const expected = this.preservedRouteEndpoints.get(route.connectionName)
+      const start = route.route[0]
+      const end = route.route.at(-1)
+      if (
+        !expected ||
+        !start ||
+        !end ||
+        !pointsMatch(start, expected.start) ||
+        !pointsMatch(end, expected.end)
+      ) {
+        throw new Error(
+          `TraceSimplificationSolver changed a preserved endpoint for route "${route.connectionName}"`,
+        )
+      }
+    }
   }
 
   private isSameNetObstacle(route: HighDensityRoute, obstacle: Obstacle) {
@@ -151,18 +249,28 @@ export class TraceSimplificationSolver extends BaseSolver {
       ...route,
       route: route.route.map((point, index, points) => {
         const nextPoint = points[index + 1]
-        if (
+        const sameNetObstacle =
           nextPoint &&
           point.z !== nextPoint.z &&
           this.getSameNetObstacleForSegment(route, point, nextPoint)
-        ) {
+
+        if (sameNetObstacle) {
           return {
             ...point,
             toNextSegmentType: "through_obstacle" as const,
+            ...(sameNetObstacle.circuitJsonMetadata
+              ? {
+                  toNextSegmentCircuitJsonMetadata:
+                    sameNetObstacle.circuitJsonMetadata,
+                }
+              : {}),
           }
         }
 
-        return { ...point }
+        const finalizedPoint = { ...point }
+        delete finalizedPoint.toNextSegmentType
+        delete finalizedPoint.toNextSegmentCircuitJsonMetadata
+        return finalizedPoint
       }),
       vias: route.vias.filter(
         (via) => !this.isViaInsideSameNetObstacle(route, via),
@@ -189,9 +297,9 @@ export class TraceSimplificationSolver extends BaseSolver {
       if (this.activeSubSolver.solved) {
         // Capture output using the registered callback
         if (this.extractResult) {
-          this.hdRoutes = this.markThroughObstacleSegments(
-            this.extractResult(this.activeSubSolver),
-          )
+          const extractedRoutes = this.extractResult(this.activeSubSolver)
+          this.validatePreservedRouteEndpoints(extractedRoutes)
+          this.hdRoutes = this.markThroughObstacleSegments(extractedRoutes)
         }
 
         // Clear activeSubSolver
@@ -200,6 +308,11 @@ export class TraceSimplificationSolver extends BaseSolver {
 
         // Advance phase
         if (this.currentPhase === "via_removal") {
+          this.currentPhase = this.simplificationConfig
+            .enableCrossingViaReduction
+            ? "crossing_via_reduction"
+            : "via_merging"
+        } else if (this.currentPhase === "crossing_via_reduction") {
           this.currentPhase = "via_merging"
         } else if (this.currentPhase === "via_merging") {
           this.currentPhase = "path_simplification"
@@ -245,15 +358,39 @@ export class TraceSimplificationSolver extends BaseSolver {
             // Delay the quadratic anchor search until the first path pass has
             // reduced the route point count.
             enableGeometryShortcuts: this.simplificationPipelineLoops > 0,
+            enableObstacleDetourShortcuts:
+              this.simplificationConfig.enableCrossingViaReduction === true &&
+              this.simplificationPipelineLoops > 0,
+            preserveRouteEndpoints:
+              this.simplificationConfig.preserveRouteEndpoints,
           })
           this.extractResult = (s) =>
             (s as UselessViaRemovalSolver).getOptimizedHdRoutes() ?? []
+          break
+
+        case "crossing_via_reduction":
+          this.activeSubSolver = new CrossingViaReductionSolver({
+            inputHdRoutes: this.hdRoutes,
+            otherHdRoutes: [...(this.simplificationConfig.otherHdRoutes ?? [])],
+            obstacles: [...this.simplificationConfig.obstacles],
+            connMap: this.simplificationConfig.connMap,
+            layerCount: this.simplificationConfig.layerCount,
+            outline: this.simplificationConfig.outline
+              ? [...this.simplificationConfig.outline]
+              : undefined,
+            traceMargin: 0.1,
+            obstacleMargin:
+              this.simplificationConfig.minTraceToPadEdgeClearance ?? 0.15,
+          })
+          this.extractResult = (s) =>
+            (s as CrossingViaReductionSolver).getReducedHdRoutes()
           break
 
         case "via_merging":
           this.activeSubSolver = new SameNetViaMergerSolver({
             inputHdRoutes: this.hdRoutes,
             otherHdRoutes: [...(this.simplificationConfig.otherHdRoutes ?? [])],
+            netByConnectionName: this.simplificationConfig.netByConnectionName,
             obstacles: [...this.simplificationConfig.obstacles],
             colorMap: { ...this.simplificationConfig.colorMap },
             layerCount: this.simplificationConfig.layerCount,
@@ -261,6 +398,8 @@ export class TraceSimplificationSolver extends BaseSolver {
             outline: this.simplificationConfig.outline
               ? [...this.simplificationConfig.outline]
               : undefined,
+            preserveRouteEndpoints:
+              this.simplificationConfig.preserveRouteEndpoints,
           })
           this.extractResult = (s) =>
             (s as SameNetViaMergerSolver).getMergedViaHdRoutes() ?? []
@@ -276,6 +415,8 @@ export class TraceSimplificationSolver extends BaseSolver {
             outline: this.simplificationConfig.outline
               ? [...this.simplificationConfig.outline]
               : undefined,
+            minBoardEdgeClearance:
+              this.simplificationConfig.minBoardEdgeClearance,
             defaultViaDiameter: this.simplificationConfig.defaultViaDiameter,
           })
           this.extractResult = (s) =>

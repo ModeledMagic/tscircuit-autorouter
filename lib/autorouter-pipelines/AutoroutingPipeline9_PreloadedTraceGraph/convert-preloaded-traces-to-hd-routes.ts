@@ -5,26 +5,42 @@ import { mapLayerNameToZ } from "lib/utils/mapLayerNameToZ"
 
 const MIN_ROUTE_DIMENSION = 1e-9
 
+export type PreloadedHighDensityRoute = HighDensityRoute & {
+  preloadedTraceIndex: number
+  preloadedRouteIndex: number
+  preloadedRoutePositionStart?: number
+  preloadedRoutePositionEnd?: number
+  isThroughObstacle?: boolean
+}
+
 export const convertPreloadedTraceToHdRoutes = (
   trace: SimplifiedPcbTrace,
   traceIndex: number,
   layerCount: number,
   defaultViaDiameter: number,
   connMap: ConnectivityMap,
-): HighDensityRoute[] => {
+): PreloadedHighDensityRoute[] => {
   const rootConnectionName =
     connMap.getNetConnectedToId(trace.connection_name) ?? trace.connection_name
-  const routes: HighDensityRoute[] = []
+  const routes: PreloadedHighDensityRoute[] = []
   const addRoute = (
     route: HighDensityRoute["route"],
     traceThickness: number,
     viaDiameter = defaultViaDiameter,
     vias: Array<{ x: number; y: number }> = [],
+    routePositionStart?: number,
+    routePositionEnd?: number,
+    isThroughObstacle = false,
   ) => {
     if (route.length < 2) return
     routes.push({
       connectionName: `${trace.connection_name}_fixed_${traceIndex}_${routes.length}`,
       rootConnectionName,
+      preloadedTraceIndex: traceIndex,
+      preloadedRouteIndex: routes.length,
+      preloadedRoutePositionStart: routePositionStart,
+      preloadedRoutePositionEnd: routePositionEnd,
+      isThroughObstacle,
       traceThickness: Math.max(MIN_ROUTE_DIMENSION, traceThickness),
       viaDiameter: Math.max(MIN_ROUTE_DIMENSION, viaDiameter),
       route,
@@ -51,6 +67,8 @@ export const convertPreloadedTraceToHdRoutes = (
         MIN_ROUTE_DIMENSION,
         point.via_diameter ?? defaultViaDiameter,
         [{ x: point.x, y: point.y }],
+        pointIndex,
+        pointIndex,
       )
       continue
     }
@@ -65,6 +83,11 @@ export const convertPreloadedTraceToHdRoutes = (
             { ...point.end, z },
           ],
           point.width,
+          defaultViaDiameter,
+          [],
+          pointIndex,
+          pointIndex + 1,
+          true,
         )
       }
       continue
@@ -93,6 +116,10 @@ export const convertPreloadedTraceToHdRoutes = (
         },
       ],
       Math.max(point.width, nextPoint.width),
+      defaultViaDiameter,
+      [],
+      pointIndex,
+      pointIndex + 1,
     )
   }
 

@@ -15,16 +15,24 @@ export const canSectionMoveToLayer = ({
   defaultTraceThickness,
   obstacleMargin,
   traceMargin,
+  shouldCheckStaticGeometryForSegment,
 }: {
   currentSection: RouteSection
   targetZ: number
   route: HighDensityRoute
-  hdRouteSHI: HighDensityRouteSpatialIndex
+  hdRouteSHI: Pick<
+    HighDensityRouteSpatialIndex,
+    "getConflictingRoutesForSegment"
+  >
   obstacleSHI: ObstacleSpatialHashIndex
   connMap: ConnectivityMap
   defaultTraceThickness: number
   obstacleMargin: number
   traceMargin?: number
+  shouldCheckStaticGeometryForSegment?: (
+    start: RouteSection["points"][number],
+    end: RouteSection["points"][number],
+  ) => boolean
 }): boolean => {
   const currentTraceThickness = route.traceThickness ?? defaultTraceThickness
   const minTraceMargin = traceMargin ?? 0
@@ -65,6 +73,8 @@ export const canSectionMoveToLayer = ({
         currentTraceThickness / 2 + otherCopperRadius + minTraceMargin
       if (distance < minDistance) return false
     }
+
+    if (shouldCheckStaticGeometryForSegment?.(A, B) === false) continue
 
     const segmentBox = {
       centerX: (A.x + B.x) / 2,
